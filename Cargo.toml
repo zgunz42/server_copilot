@@ -1,0 +1,24 @@
+[package]
+name = "digireport"
+version = "0.1.0"
+authors = ["I Kadek Adi Gunawan <adi_gunawan@live.com>"]
+license = "MIT"
+description = """
+A simple tool to make report to telegram channel using git commit message as report content
+and automatically send it to telegram channel every days.
+"""
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dev-dependencies]
+pretty_env_logger = "0.4.0"
+
+[dependencies]
+log = "0.4"
+actix-web = "4"
+chrono = "0.4.26"
+dotenv = "0.15.0"
+teloxide = "0.12.2"
+pretty_env_logger = "0.4.0"
+actix-rt = "2.8.0"
