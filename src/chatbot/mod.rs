@@ -25,6 +25,7 @@ use teloxide::{
     RequestError,
 };
 use teloxide_macros::BotCommands;
+use tokio::task::block_in_place;
 
 use crate::context;
 use crate::gitlab::GitlabUser;
@@ -157,8 +158,64 @@ pub async fn serve(
 
     ctxt.write().unwrap().set_bot(u_me);
 
+
+    //    Set-up Question Answering model
+    let config = QuestionAnsweringConfig::new(
+        ModelType::Bert,
+        // ModelResource::Torch(Box::new(RemoteResource::from_pretrained(
+        //     BertModelResources::BERT_QA,
+        // ))),
+        ModelResource::Torch(
+          Box::new(
+            LocalResource{
+                local_path: PathBuf::from("/Users/mac/StartUp/digireport-rs/rust_model.ot"),
+            }
+          )
+        ),
+        // RemoteResource::from_pretrained(BertConfigResources::BERT_QA),
+        LocalResource{
+            local_path: PathBuf::from("/Users/mac/StartUp/digireport-rs/config.json"),
+        },
+        // RemoteResource::from_pretrained(BertVocabResources::BERT_QA),
+        LocalResource{
+            local_path: PathBuf::from("/Users/mac/StartUp/digireport-rs/vocab.txt"),
+        },
+        None, //merges resource only relevant with ModelType::Roberta
+        false,
+        false,
+        None,
+    );
+
+
+    let qa_model = QuestionAnsweringModel::new(config);
+    match qa_model {
+        Ok(model) => {
+
+            let question_1 = String::from( "When does Amy cook?");
+            let context_1 = String::from("Amy lives in Amsterdam and like to cook on the weekend.");
+        
+            let qa_input_1 = QaInput {
+                question: question_1,
+                context: context_1,
+            };
+        
+            let answers = model.predict(&[qa_input_1], 1, 32).clone();
+        
+            let text_msg = format!("{:?}", answers);
+
+            println!("Answer: {:?}", text_msg);
+        
+        }
+        Err(err) => {
+            println!("Error: {:?}", err);
+            panic!("Error no model");
+        }
+    }
+
     let memory_state = InMemStorage::<State>::new();
     let deps = dptree::deps![memory_state, ctxt];
+
+
     let mut server_bot = Dispatcher::builder(
         bot,
         Update::filter_message()
@@ -169,7 +226,9 @@ pub async fn serve(
             .branch(
                 dptree::case![State::ReceiveLocation { full_name, age }].endpoint(receive_location),
             )
-            .branch(dptree::case![State::General].endpoint(general))
+            .branch(dptree::case![State::General].endpoint(
+                general
+            ))
             .branch(dptree::case![State::ReceiveGitlabToken { full_name }].endpoint(gitlab_token)),
     )
     .dependencies(deps)
@@ -308,8 +367,14 @@ async fn general(
             }
           )
         ),
-        RemoteResource::from_pretrained(BertConfigResources::BERT_QA),
-        RemoteResource::from_pretrained(BertVocabResources::BERT_QA),
+        // RemoteResource::from_pretrained(BertConfigResources::BERT_QA),
+        LocalResource{
+            local_path: PathBuf::from("/Users/mac/StartUp/digireport-rs/config.json"),
+        },
+        // RemoteResource::from_pretrained(BertVocabResources::BERT_QA),
+        LocalResource{
+            local_path: PathBuf::from("/Users/mac/StartUp/digireport-rs/vocab.txt"),
+        },
         None, //merges resource only relevant with ModelType::Roberta
         false,
         false,
