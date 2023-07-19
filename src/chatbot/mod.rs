@@ -5,7 +5,8 @@ use rust_bert::pipelines::question_answering::{
     QaInput, QuestionAnsweringConfig, QuestionAnsweringModel,
 };
 use rust_bert::resources::{RemoteResource, LocalResource};
-use std::env;
+use std::io::Read;
+use std::{env, fs};
 use std::path::PathBuf;
 use std::{
     error::Error,
@@ -27,82 +28,7 @@ use teloxide::{
 use teloxide_macros::BotCommands;
 use tokio::task::block_in_place;
 
-use crate::context;
-use crate::gitlab::GitlabUser;
-
-#[derive(BotCommands, Clone)]
-#[command(
-    rename_rule = "lowercase",
-    description = "These commands are supported:"
-)]
-pub enum Command {
-    #[command(description = "display this text.")]
-    Help,
-    #[command(description = "handle a username.")]
-    Username(String),
-    #[command(description = "handle a username and an age.", parse_with = "split")]
-    UsernameAndAge { username: String, age: u8 },
-    #[command(description = "initialize gitlab user token")]
-    InitToken(String),
-    #[command(description = "display information")]
-    Start,
-    #[command(description = "display all repositories")]
-    Repositories,
-}
-
-pub async fn answer(
-    bot: Bot,
-    msg: Message,
-    cmd: Command,
-    user: &mut GitlabUser,
-) -> Result<(), RequestError> {
-    match cmd {
-        Command::Help => {
-            bot.send_message(msg.chat.id, Command::descriptions().to_string())
-                .await?
-        }
-        Command::Username(username) => {
-            bot.send_message(msg.chat.id, format!("Your username is @{username}."))
-                .await?
-        }
-        Command::UsernameAndAge { username, age } => {
-            bot.send_message(
-                msg.chat.id,
-                format!("Your username is @{username} and age is {age}."),
-            )
-            .await?
-        }
-        Command::Start => bot.send_message(msg.chat.id, "text").await?,
-        Command::InitToken(token) => {
-            user.set_token(token);
-            bot.send_message(msg.chat.id, "token set").await?
-        }
-        Command::Repositories => {
-            let repositories = user.get_repositories().await;
-            let results = match repositories {
-                Ok(repositories) => repositories,
-                Err(err) => {
-                    bot.send_message(msg.chat.id, format!("Error: {:?}", err))
-                        .await?;
-                    panic!("read message");
-                }
-            };
-            let mut message = String::new();
-            for repo in results {
-                message.push_str(&format!(
-                    "id: {}\nname: {}\ndescription: {}\nvisibility: {}\n\n",
-                    repo.id,
-                    repo.name,
-                    repo.description.unwrap_or("".to_string()),
-                    repo.visibility
-                ));
-            }
-            bot.send_message(msg.chat.id, message).await?
-        }
-    };
-
-    Ok(())
-}
+use crate::context::{self, Context};
 
 type MyDialogue = Dialogue<State, InMemStorage<State>>;
 type HandlerResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
@@ -115,14 +41,17 @@ pub enum State {
     ReceiveGitlabToken {
         full_name: String,
     },
-    ReceiveAge {
-        full_name: String,
-    },
     ReceiveLocation {
         full_name: String,
         age: u8,
     },
     General,
+}
+
+struct DependencySupplier {
+    ctx: Arc<RwLock<Context>>,
+    qa_model: Mutex<Option<QuestionAnsweringModel>>,
+    
 }
 
 pub async fn serve(
@@ -162,9 +91,6 @@ pub async fn serve(
     //    Set-up Question Answering model
     let config = QuestionAnsweringConfig::new(
         ModelType::Bert,
-        // ModelResource::Torch(Box::new(RemoteResource::from_pretrained(
-        //     BertModelResources::BERT_QA,
-        // ))),
         ModelResource::Torch(
           Box::new(
             LocalResource{
@@ -172,11 +98,9 @@ pub async fn serve(
             }
           )
         ),
-        // RemoteResource::from_pretrained(BertConfigResources::BERT_QA),
         LocalResource{
             local_path: PathBuf::from("/Users/mac/StartUp/digireport-rs/config.json"),
         },
-        // RemoteResource::from_pretrained(BertVocabResources::BERT_QA),
         LocalResource{
             local_path: PathBuf::from("/Users/mac/StartUp/digireport-rs/vocab.txt"),
         },
@@ -188,32 +112,21 @@ pub async fn serve(
 
 
     let qa_model = QuestionAnsweringModel::new(config);
+    let qa_model_result: QuestionAnsweringModel;
     match qa_model {
         Ok(model) => {
-
-            let question_1 = String::from( "When does Amy cook?");
-            let context_1 = String::from("Amy lives in Amsterdam and like to cook on the weekend.");
-        
-            let qa_input_1 = QaInput {
-                question: question_1,
-                context: context_1,
-            };
-        
-            let answers = model.predict(&[qa_input_1], 1, 32).clone();
-        
-            let text_msg = format!("{:?}", answers);
-
-            println!("Answer: {:?}", text_msg);
-        
+            qa_model_result = model;
         }
         Err(err) => {
             println!("Error: {:?}", err);
             panic!("Error no model");
         }
     }
+    
+    let qa_model_safe = Arc::new(Mutex::new(qa_model_result));
 
     let memory_state = InMemStorage::<State>::new();
-    let deps = dptree::deps![memory_state, ctxt];
+    let deps = dptree::deps![memory_state, ctxt, qa_model_safe];
 
 
     let mut server_bot = Dispatcher::builder(
@@ -222,13 +135,10 @@ pub async fn serve(
             .enter_dialogue::<Message, InMemStorage<State>, State>()
             .branch(dptree::case![State::Start].endpoint(start))
             .branch(dptree::case![State::ReceiveFullName].endpoint(receive_full_name))
-            .branch(dptree::case![State::ReceiveAge { full_name }].endpoint(receive_age))
             .branch(
                 dptree::case![State::ReceiveLocation { full_name, age }].endpoint(receive_location),
             )
-            .branch(dptree::case![State::General].endpoint(
-                general
-            ))
+            .branch(dptree::case![State::General].endpoint(general))
             .branch(dptree::case![State::ReceiveGitlabToken { full_name }].endpoint(gitlab_token)),
     )
     .dependencies(deps)
@@ -345,70 +255,64 @@ async fn receive_location(
     Ok(())
 }
 
+fn read_file_to_string(file_path: &std::path::PathBuf) -> std::io::Result<String> {
+    let mut file = fs::File::open(file_path)?;
+    let mut buffer = String::new();
+    file.read_to_string(&mut buffer)?;
+
+    buffer = buffer.replace('\n', " ");
+
+    Ok(buffer)
+}
+
 async fn general(
     bot: Bot,
     dialogue: MyDialogue,
-    ctxt: Arc<RwLock<context::Context>>,
-    // (full_name, age): (String, u8),
+    wmodel: Arc<Mutex<QuestionAnsweringModel>>,
     msg: Message,
 ) -> HandlerResult {
-    // start the
-
-    //    Set-up Question Answering model
-    let config = QuestionAnsweringConfig::new(
-        ModelType::Bert,
-        // ModelResource::Torch(Box::new(RemoteResource::from_pretrained(
-        //     BertModelResources::BERT_QA,
-        // ))),
-        ModelResource::Torch(
-          Box::new(
-            LocalResource{
-                local_path: PathBuf::from("/Users/mac/StartUp/digireport-rs/rust_model.ot"),
-            }
-          )
-        ),
-        // RemoteResource::from_pretrained(BertConfigResources::BERT_QA),
-        LocalResource{
-            local_path: PathBuf::from("/Users/mac/StartUp/digireport-rs/config.json"),
-        },
-        // RemoteResource::from_pretrained(BertVocabResources::BERT_QA),
-        LocalResource{
-            local_path: PathBuf::from("/Users/mac/StartUp/digireport-rs/vocab.txt"),
-        },
-        None, //merges resource only relevant with ModelType::Roberta
-        false,
-        false,
-        None,
-    );
-
-
-    let qa_model = QuestionAnsweringModel::new(config);
-    let mmodel: QuestionAnsweringModel;
-    match qa_model {
-        Ok(model) => {
-            mmodel = model;
-        }
-        Err(err) => {
-            println!("Error: {:?}", err);
-            panic!("Error no model");
-        }
-    }
-
     match msg.text() {
-        Some(location) => {
-            let question_1 = location.to_string();
-            let context_1 = String::from("Amy lives in Amsterdam");
+        Some(reply) => {
+            let question_1 = reply.to_string();
 
-            let qa_input_1 = QaInput {
-                question: question_1,
-                context: context_1,
-            };
+            // load about me txt
+            let context_path = "about_me.txt";
+            let current_dir = env::current_dir().expect("Failed to get current directory");
+            
+            let file_path = current_dir.join(context_path);
+            let context_result = read_file_to_string(&file_path);
 
-            let answers = mmodel.predict(&[qa_input_1], 1, 32).clone();
+            match context_result {
+                Ok(file_content) => {
 
-            let text_msg = format!("{:?}", answers);
+                    let qa_input_1 = QaInput {
+                        question: question_1,
+                        context: file_content,
+                    };
+        
+                    let answers = wmodel.lock().unwrap().predict(&[qa_input_1], 1, 32).clone();
 
-            bot.send_message(msg.chat.id, text_msg).await?;
+                    if answers.len() > 0 {
+                        let answer = answers[0][0].clone();
+                        println!("{}", answer.score);
+                        if answer.score > 0.07 {
+                            let text_msg = answer.answer.to_string();
+                
+                            bot.send_message(msg.chat.id, text_msg).await?;
+                        } else {
+                            bot.send_message(msg.chat.id, "sorry, i don't understand").await?;
+                        }
+
+                    } else {
+                        bot.send_message(msg.chat.id, "sorry, i don't understand").await?;
+                    }
+
+                }
+                Err(err) => {
+                    bot.send_message(msg.chat.id, "failed to load information").await?;
+                }
+            }
+
 
             return Ok(());
         }
