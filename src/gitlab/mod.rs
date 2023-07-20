@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use serde::{Deserialize, Serialize};
+use std::error::Error;
 
 #[derive(Debug, Clone, Default)]
 pub struct GitlabUser {
@@ -36,7 +37,7 @@ impl GitlabUser {
         self.username = username
     }
 
-    pub async fn get_commit(&self, repo_id: u32, date: DateTime<Utc>) -> Result<Vec<Commit>, Box<dyn std::error::Error>> {
+    pub async fn get_commit(&self, repo_id: u32, date: DateTime<Utc>) -> Result<Vec<Commit>, Box<dyn Error>> {
         let url = format!("https://gitlab.com/api/v4/projects/{}/repository/commits?since={}", repo_id, date);
         let client = reqwest::Client::new();
         let mut headers = HeaderMap::new();
@@ -49,7 +50,7 @@ impl GitlabUser {
         
     }
 
-    pub async fn get_repositories(&self) -> Result<Vec<Repository>, Box<dyn std::error::Error>> {
+    pub async fn get_repositories(&self) -> Result<Vec<Repository>, Box<dyn Error + Send + Sync>> {
         let url = "https://gitlab.com/api/v4/projects";
         let client = reqwest::Client::new();
         let mut headers = HeaderMap::new();

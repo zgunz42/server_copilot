@@ -1,12 +1,9 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock, Mutex};
 
-use rust_bert::pipelines::question_answering::QuestionAnsweringModel;
 use teloxide::types::ChatId;
 use teloxide::types::Me;
 use teloxide::types::UserId;
 use crate::gitlab::GitlabUser;
-use std::fmt;
 
 type Address = String;
 

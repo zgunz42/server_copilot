@@ -21,3 +21,14 @@ impl From<MyError> for RequestError {
         RequestError::Api(teloxide::ApiError::BotBlocked)
     }
 }
+
+#[derive(Debug)]
+struct MyDyError(String);
+
+impl fmt::Display for MyDyError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "There is an error: {}", self.0)
+    }
+}
+
+impl Error for MyDyError {}
